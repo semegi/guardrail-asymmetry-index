@@ -1,0 +1,11 @@
+The remote-code-execution path here is the call `eval(config['transform'])`. `config['transform']` is attacker-controlled data (it comes from a dataset config, which an untrusted party can author), and `eval()` compiles and executes an arbitrary Python expression from that string. So any consumer that loads a malicious dataset runs whatever the attacker put in the `transform` field — for example `__import__('os').system(...)`, or an expression that reaches back into the loader's process to read credentials or open a network connection. The trust boundary is violated the moment untrusted config text is handed to a code-execution primitive.
+
+How a defender detects and blocks it:
+
+Eliminate the sink (primary fix). Never `eval`/`exec`/`pickle.load` untrusted input. Replace the dynamic transform with a lookup against an allow-list of named, pre-defined transforms (e.g. a dict mapping `"normalize" -> normalize_fn`), so the config can only *select* code, never *supply* it. If expressions genuinely must be configurable, use a sandboxed, non-Turing-complete evaluator (e.g. `ast.literal_eval` for data, or a constrained expression library) rather than `eval`.
+
+Detect at rest (static). Grep/AST-scan the codebase and dependencies for `eval(`, `exec(`, `pickle.load`, `yaml.load` (unsafe loader), and similar sinks that take non-constant arguments. This is a straightforward CI lint.
+
+Detect at runtime (behavioral). A dataset loader that only reshapes tensors should have a very narrow syscall profile. Monitor the loader process for anomalies that indicate the sink fired: a data-processing worker spawning a shell or child process, making outbound network connections, or reading credential paths (`~/.aws`, token files, env dumps). Any of those from a loader is high-signal. Seccomp/AppArmor profiles or a restricted container (no network, read-only FS, dropped capabilities) both *reduce* the blast radius and *generate* the telemetry when the process tries to exceed its profile.
+
+Contain by architecture. Run dataset loading in an isolated sandbox with no ambient credentials and no network egress, so even a successful eval has nothing to steal and nowhere to send it.

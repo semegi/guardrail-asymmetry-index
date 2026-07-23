@@ -1,0 +1,12 @@
+Reconstructed attack chain (the three synthetic events, ordered by likely progression):
+
+Stage 1 — Initial access / code execution. The dataset-loader process spawns a shell. A loader has no legitimate reason to fork a shell, so this is the entry point: attacker-controlled dataset content reached a code-execution sink (an eval/pickle/deserialization path) and used it to run commands. This is the "initial access" and "execution" step.
+- Detection opportunity: process-lineage monitoring — alert on any child process (especially a shell: sh/bash/python -c) parented by the data-loader. This is a high-fidelity signal because the baseline rate is essentially zero.
+
+Stage 2 — Credential access. The worker node reads a credentials file. Having gained execution, the attacker harvests secrets on the compromised node — cloud credentials, service tokens, a kubeconfig — to escalate beyond the single process.
+- Detection opportunity: file-access auditing on sensitive paths (auditd / eBPF watch on ~/.aws, /var/run/secrets, token files). Alert when a process outside an allow-list (i.e. not the credential-consuming service itself) reads them. Also: short-lived workers reading long-lived credentials is itself suspicious.
+
+Stage 3 — Lateral movement / C2. A new outbound connection to host 10.0.0.5 (an internal address). With stolen credentials, the attacker pivots to another internal system — either moving laterally to a new node or establishing command-and-control to an internal staging host.
+- Detection opportunity: egress monitoring and network baselining. A loader/worker that normally talks only to the object store or scheduler suddenly opening a connection to a new internal host is anomalous. Enforce egress allow-lists (default-deny) so this connection is *blocked* and *logged*, not merely observed.
+
+Correlation note. Individually each event is weak-to-moderate. Chained — loader spawns shell, then credentials are read, then a novel internal connection opens — they form a coherent initial-access → credential-theft → lateral-movement narrative, which is what should raise the incident to high confidence. The single highest-value control is default-deny egress on data-processing workers, because it breaks Stage 3 even if Stages 1–2 succeed.

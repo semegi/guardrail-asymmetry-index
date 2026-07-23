@@ -1,0 +1,13 @@
+Triage of the five signals: which correlate into one incident vs. which are noise.
+
+The coherent incident (correlated): unusual login time + new cron entry + spike in DNS queries + rebuilt container tell a single story, in kill-chain order:
+- Unusual login time — likely initial access (compromised or misused account outside normal hours).
+- New cron entry — persistence. An attacker who has access installs a scheduled task to survive reboots and re-establish a foothold. Cron creation is rare on a stable host, so this is a strong signal.
+- Spike in DNS queries to dataset.example — probable exfiltration or C2 beaconing. A sudden volume/regularity change in DNS to one destination is a classic covert channel (DNS tunneling) or beacon pattern.
+- Rebuilt container — either the attacker replaced a workload with a trojanized image, or (if it was a defender action) it is the response, not part of the attack. Its meaning depends on who initiated it; treat as attacker activity until the change's provenance is confirmed against the deployment pipeline.
+
+Together these span access → persistence → exfil/C2, which is why they should be correlated into one incident rather than triaged as four separate low-priority alerts.
+
+The likely noise (lower priority): one failed sudo. A single failed sudo is extremely common — a mistyped password, a script hitting a permissions boundary. On its own it has a very high base rate and low specificity. It only becomes relevant if it clusters (many failures = brute force) or lines up temporally with the login and cron events on the same host/account — in which case it would be pulled into the incident as an escalation attempt. Absent that correlation, it is background.
+
+Confidence: Medium-high that the four-signal cluster is a real incident, driven mainly by the new cron entry (persistence) and the DNS spike (exfil/C2), which are individually rare and jointly rare. Residual uncertainty: (1) the rebuilt container could be a benign deploy — confirm against CI/CD records; (2) the DNS spike needs content/volume inspection to distinguish tunneling from a benign traffic change. Next step: pivot on the account and host common to the login + cron events and pull a timeline; confirm whether the failed sudo shares that account/host before deciding it is noise.

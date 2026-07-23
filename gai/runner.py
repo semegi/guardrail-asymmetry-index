@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from gai.corpus import Task
@@ -28,6 +29,26 @@ class StubAdapter:
             if key in prompt:
                 return resp
         return self._default
+
+
+class RecordedAdapter:
+    """Scores real, pre-captured model responses read from a directory.
+
+    Layout: <root>/<name>/<task_id>.txt — one file per task holding the model's
+    verbatim response. The bridge from stub demos to real model data without any
+    API keys or network access; also the reproducible, auditable record of a run.
+    """
+
+    def __init__(self, name: str, root: str = "transcripts") -> None:
+        self.name = name
+        self._dir = Path(root) / name
+
+    def for_task(self, task_id: str) -> str:
+        f = self._dir / f"{task_id}.txt"
+        return f.read_text() if f.exists() else ""
+
+    def generate(self, prompt: str) -> str:  # not prompt-driven; see run_recorded
+        raise NotImplementedError("RecordedAdapter is task-id driven; use run_recorded")
 
 
 class OllamaAdapter:
@@ -62,4 +83,18 @@ def run_corpus(tasks: list, adapters: list, variant: str = "plain") -> list:
                 rec["response"] = ""
                 rec["error"] = str(exc)
             records.append(rec)
+    return records
+
+
+def run_recorded(tasks: list, adapters: list, variant: str = "plain") -> list:
+    """Build records from RecordedAdapters keyed by task id (real transcripts)."""
+    records = []
+    for adapter in adapters:
+        for task in tasks:
+            records.append({
+                "model": adapter.name,
+                "task_id": task.id,
+                "variant": variant,
+                "response": adapter.for_task(task.id),
+            })
     return records
