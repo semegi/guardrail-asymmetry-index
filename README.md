@@ -54,10 +54,20 @@ tasks/*.json → runner (adapters) → classify (two-axis Belnap) → score → 
 
 ```bash
 python3 -m gai.cli        # runs the bundled offline demo, writes report/
+python3 -m gai.record     # scores REAL model transcripts (see below)
 python3 -m pytest -q      # full suite, no network required
 ```
 
-### Add a local model
+### Score a real model with zero infrastructure (recommended)
+
+No API keys, no local model runtime needed. Drop a model's verbatim answers to
+the corpus tasks into `transcripts/<model-name>/<task_id>.txt` and run
+`python3 -m gai.record`. Each file is one model's real response to one task; the
+offline classifier scores them independently. This is how you add real data —
+Claude, GPT, a local model, anything you can get a transcript from. The repo ships
+one seeded real row (`transcripts/claude-fable-5/`) as a worked example.
+
+### Add a local model (fully automated)
 
 ```python
 from gai.runner import OllamaAdapter
