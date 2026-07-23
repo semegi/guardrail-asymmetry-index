@@ -71,6 +71,84 @@ class OllamaAdapter:
             return json.loads(r.read()).get("response", "")
 
 
+# --- Refusal sentinel -------------------------------------------------------
+# A hosted API can decline a request as a first-class outcome (e.g. Anthropic's
+# stop_reason == "refusal") rather than by writing "I can't help" in the text.
+# Adapters surface that as this explicit marker so the classifier scores it as a
+# genuine F (full refusal) instead of an N (empty non-answer).
+API_REFUSAL_MARKER = "[[API_REFUSAL]]"
+
+
+class AnthropicAdapter:
+    """Anthropic Messages API via stdlib urllib. Not exercised in offline tests.
+
+    A stop_reason of "refusal" is returned as API_REFUSAL_MARKER — a refusal is
+    a valid GAI data point (the guardrail declined the defensive task), not an
+    error.
+    """
+
+    def __init__(self, api_key: str, model: str = "claude-opus-4-8",
+                 max_tokens: int = 1024) -> None:
+        self.name = model
+        self._key = api_key
+        self._model = model
+        self._max_tokens = max_tokens
+
+    def generate(self, prompt: str) -> str:
+        payload = json.dumps({
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages", data=payload,
+            headers={
+                "content-type": "application/json",
+                "x-api-key": self._key,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310
+            body = json.loads(r.read())
+        if body.get("stop_reason") == "refusal":
+            return API_REFUSAL_MARKER
+        parts = [b.get("text", "") for b in body.get("content", []) if b.get("type") == "text"]
+        return "".join(parts)
+
+
+class DeepSeekAdapter:
+    """DeepSeek via its OpenAI-compatible chat/completions API (stdlib urllib)."""
+
+    def __init__(self, api_key: str, model: str = "deepseek-chat",
+                 max_tokens: int = 1024,
+                 base_url: str = "https://api.deepseek.com") -> None:
+        self.name = model
+        self._key = api_key
+        self._model = model
+        self._max_tokens = max_tokens
+        self._base = base_url.rstrip("/")
+
+    def generate(self, prompt: str) -> str:
+        payload = json.dumps({
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base}/chat/completions", data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310
+            body = json.loads(r.read())
+        choices = body.get("choices", [])
+        if not choices:
+            return ""
+        return choices[0].get("message", {}).get("content", "") or ""
+
+
 def run_corpus(tasks: list, adapters: list, variant: str = "plain") -> list:
     records = []
     for adapter in adapters:

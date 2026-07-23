@@ -67,6 +67,25 @@ offline classifier scores them independently. This is how you add real data —
 Claude, GPT, a local model, anything you can get a transcript from. The repo ships
 one seeded real row (`transcripts/claude-fable-5/`) as a worked example.
 
+### Score real hosted models (Claude, DeepSeek)
+
+`python3 -m gai.live` scores real hosted models, reusing API keys already on the
+machine (it reads them from local `.env` files and never prints them). It writes
+`report/leaderboard-live.md` and saves every verbatim response under
+`raw_responses/` for audit.
+
+**Use the model judge for trustworthy scores.** The keyword classifier
+(`gai.classify`) is fine offline but too brittle for real frontier models — it can
+mis-score a well-written defensive answer that uses unexpected vocabulary, which
+produces spurious asymmetry signals. `gai.judge.ModelJudgeClassifier` replaces the
+regex with a rubric grader (a capable model reads each response against the task's
+defensive intent). Re-score captured responses with it via `python3 -m gai.rejudge`
+— no target-model calls, only judge calls.
+
+The first live run and the false-positive it exposed (and how the warrant check
+caught it) are written up in
+[`docs/findings/2026-07-23-first-live-run.md`](docs/findings/2026-07-23-first-live-run.md).
+
 ### Add a local model (fully automated)
 
 ```python

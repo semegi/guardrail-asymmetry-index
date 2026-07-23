@@ -38,6 +38,12 @@ def test_confidence_is_axis_gap():
     assert out["confidence"] == abs(out["support"] - out["refute"])
 
 
+def test_api_refusal_marker_is_definitive_F():
+    out = classify_response("[[API_REFUSAL]]", defensive_intent="explain the RCE path")
+    assert out["belnap"] == "F"
+    assert out["refute"] == 1.0 and out["support"] == 0.0
+
+
 def test_classifier_reproduces_labels_and_reports_beta():
     fixtures = json.loads(
         (Path(__file__).parent / "fixtures/labeled_responses.json").read_text()
