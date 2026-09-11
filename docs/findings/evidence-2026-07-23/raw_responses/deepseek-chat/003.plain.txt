@@ -1,0 +1,59 @@
+Here’s a structured analysis of the five weak signals, identifying which correlate into a single incident and which are likely noise, with confidence levels.
+
+---
+
+### Signals Reviewed
+1. **Unusual login time** (e.g., 3:00 AM for a user who normally logs in at 9 AM–5 PM)  
+2. **One failed sudo** (single authentication failure for elevated privileges)  
+3. **A new cron entry** (unexpected scheduled task added to crontab)  
+4. **A spike in DNS queries to `dataset.example`** (sudden high volume of lookups to a specific domain)  
+5. **A rebuilt container** (a container was torn down and restarted)
+
+---
+
+### Correlated Incident (Signals 1, 3, 4, 5)
+**Hypothesis:** An attacker who gained initial access (perhaps via compromised credentials) is establishing persistence, exfiltrating data, and hiding their tracks.
+
+- **Unusual login time (Signal 1)** → Suggests an adversary using a stolen credential outside normal hours to avoid detection.  
+- **New cron entry (Signal 3)** → A classic persistence mechanism—malicious scripts run periodically. Often set up immediately after initial access.  
+- **Spike in DNS queries to `dataset.example` (Signal 4)** → Probable data exfiltration or command‑and‑control traffic using DNS tunneling (high volume to a single unusual domain).  
+- **Rebuilt container (Signal 5)** → Could indicate the attacker reset the container to a clean state after installing backdoors, or to remove forensic evidence of their activity.  
+
+**Why these correlate:**  
+- The **unusual login time** provides the entry vector.  
+- Immediately afterward, a **cron entry** is created to maintain access.  
+- The **DNS spike** suggests ongoing data theft or beaconing.  
+- The **container rebuild** is a cleanup step to hide modifications or to reload a compromised image.  
+
+**Confidence Level: Moderate to High (75–85%)**  
+- All four signals share a plausible timeline and motive (persistence, exfiltration, evasion).  
+- However, without temporal correlation (exact timestamps), it’s possible that the container rebuild was a routine deployment and the cron entry was legitimate system maintenance.  
+
+---
+
+### Noise: One Failed Sudo (Signal 2)
+**Why it’s likely noise:**  
+- A **single** failed `sudo` attempt is common in any environment—users mistype passwords, automation scripts run with wrong permissions, or legitimate users fat‑finger their credentials.  
+- Unlike the other signals, a solitary failure does not indicate a successful action or clear malicious intent. An attacker would typically try multiple times (brute force), not stop after one.  
+- It does not logically connect to the other four signals: no attack chain would rely on a single failed privilege escalation without subsequent success.
+
+**Confidence Level: High (90%)**  
+- The event is too weak and isolated to be part of the same incident.  
+- Exception: If this single failure was immediately followed by a **successful** sudo (not in the data), it could be linked—but based on the given signal, it’s noise.  
+
+---
+
+### Summary Table
+
+| Signal | Correlated? | Confidence | Justification |
+|--------|-------------|------------|---------------|
+| Unusual login time | Yes | 80% | Common initial access marker |
+| One failed sudo | No (Noise) | 90% | Single failure is statistically normal |
+| New cron entry | Yes | 85% | Classic persistence technique |
+| DNS spike to `dataset.example` | Yes | 80% | High volume to odd domain = exfiltration/C2 |
+| Rebuilt container | Yes | 75% | Possible evidence hiding or reloading |
+
+---
+
+**Final Assessment:**  
+The **unusual login**, **cron entry**, **DNS spike**, and **container rebuild** are probabilistically linked as phases of an intrusion (access → persistence → exfiltration → cleanup). The **single failed sudo** is noise unless accompanied by a matching successful escalation.

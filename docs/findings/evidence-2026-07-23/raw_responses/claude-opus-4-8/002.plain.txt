@@ -1,0 +1,45 @@
+# Attack Chain Reconstruction
+
+Here's a plausible reconstruction, though I'll flag the interpretive uncertainty as we go.
+
+## Stage 1: Initial Execution — Dataset-loader spawns a shell
+
+**Likely meaning:** A data-loading process (often running deserialization or executing untrusted config/pickle files in ML pipelines) was abused to gain code execution. Dataset loaders are a classic vector because they process attacker-influenceable input.
+
+**Detection opportunity:**
+- **Process lineage anomaly** — a data-processing binary spawning `/bin/sh`, `bash`, `cmd.exe`, or `python -c` is rarely legitimate. Alert on unexpected child processes of known-benign parents.
+- Baseline the loader's normal process tree; this is a high-fidelity signal.
+
+## Stage 2: Credential Access — Worker reads a credentials file
+
+**Likely meaning:** Post-execution, the attacker moved toward credential theft (cloud keys, `.aws/credentials`, service tokens, `kubeconfig`). This is the pivot toward escalation/lateral movement.
+
+**Detection opportunity:**
+- **File access auditing** on sensitive paths (auditd/FIM on credential stores, `~/.aws/`, `/var/run/secrets/`, keyrings).
+- **Unexpected reader identity** — flag when a process *not* on the allowlist for a secret accesses it. In ML infra, worker nodes reading credentials outside a known startup window is suspicious.
+
+## Stage 3: Command & Control / Exfiltration — Outbound connection to 10.0.0.5
+
+**Likely meaning:** Either C2 beaconing or exfiltration of the stolen credentials. Note 10.0.0.5 is **RFC1918 private space** — so this may actually be *lateral movement* to an internal host rather than external exfil.
+
+**Detection opportunity:**
+- **Egress/network anomaly** — new destination not in the process's normal connection baseline.
+- **Process-to-network correlation** — tie the connection back to the shell/worker from stages 1–2.
+- **Internal traffic monitoring** — since 10.0.0.5 is internal, east-west detection matters (not just perimeter).
+
+---
+
+## Chain Summary
+
+| Stage | Tactic (ATT&CK) | Detection |
+|-------|-----------------|-----------|
+| 1. Loader → shell | Execution (T1059) | Process lineage anomaly |
+| 2. Read creds | Credential Access (T1552) | Sensitive-file access auditing |
+| 3. Conn to 10.0.0.5 | C2 / Lateral Movement (T1071 / T1021) | Egress + process-network correlation |
+
+---
+
+## Caveats worth stating
+
+- **This ordering is inferred, not proven.** The three events may not be causally linked — correlate on **timestamps, process IDs, and user context** before asserting a single chain.
+- **10.0.0.5 being internal** substantially changes the story (lateral movement / legit internal service vs. exfil). Worth conf

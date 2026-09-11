@@ -1,0 +1,39 @@
+# Signal Correlation Analysis
+
+## The Core Problem
+None of these signals is individually alarming. The question is whether they share a **causal thread** (same actor, same timeframe, same objective) or are coincidental. I'll be explicit about what would raise or lower my confidence, because with the data as described, I'm reasoning from plausibility, not proof.
+
+## Grouping
+
+**Likely correlated → single incident (Moderate confidence, ~60%)**
+
+| Signal | Role in a plausible attack chain |
+|--------|----------------------------------|
+| Unusual login time | Initial access / off-hours to avoid observers |
+| New cron entry | Persistence mechanism |
+| DNS spike to dataset.example | Data staging / exfiltration or C2 signaling |
+
+These three form a coherent narrative: *access → persistence → exfil*. That's a recognizable pattern (a mini kill-chain), which is why they hang together better than the others.
+
+**Probably noise / weakly related (Low-moderate confidence)**
+
+- **One failed sudo** — A *single* failure is more consistent with a fat-fingered password than an attack. Real privilege escalation attempts usually show either a burst of failures or a clean success after reconnaissance. Alone, it's the weakest signal. (~70% noise)
+- **Rebuilt container** — Extremely common in normal CI/CD and ops. Only suspicious if it coincides tightly with the login. (~65% noise, absent timing data)
+
+## The Decisive Question: Timing
+My whole assessment hinges on **temporal proximity**, which the prompt doesn't give me. This is the single biggest driver of confidence:
+
+- If the login, cron entry, and DNS spike occurred **within the same short window (minutes to a couple hours)** → confidence the three form one incident jumps to **~80%**.
+- If they're **spread over days** → they likely collapse back into independent noise, and confidence drops to **~30%**.
+
+## What Would Change My Verdict
+- **Same source IP/user across login + sudo + cron** → merges sudo into the incident, pushes confidence to ~85%.
+- **dataset.example is a legitimate internal data source** → the DNS spike becomes benign, and the incident thesis largely collapses.
+- **Container rebuild introduced the cron entry** → reframes this as a deployment artifact, not an attack.
+
+## Bottom Line
+**Most probable incident:** unusual login → cron persistence → DNS exfiltration, as one chain. **Confidence: moderate (~60%), contingent on timing correlation.**
+
+**Treat as noise pending evidence:** the single failed sudo and the container rebuild.
+
+I'd deliberately avoid over-fitting these into one story — the human instinct to connect five events into a clean narrative is exactly how false positives get escalated. I'd pull the timestamps and source identities before acting, since those two data points would move my confidence more than any amount of further reasoning on the current inputs.

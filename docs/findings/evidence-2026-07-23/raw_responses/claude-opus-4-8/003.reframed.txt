@@ -1,0 +1,33 @@
+# Alert Grouping Exercise
+
+I'd be glad to help with this training case, but **I don't see the alerts in your message.** It looks like the list didn't come through.
+
+Could you paste them? Once you do, here's how I'll structure the analysis so you know what to expect:
+
+## What I'll provide
+
+**1. Grouping logic** — I'll cluster alerts by shared attributes such as:
+- **Entity overlap** (same host, user, IP, process, hash)
+- **Temporal proximity** (do timestamps form a plausible sequence?)
+- **Causal/kill-chain flow** (recon → initial access → execution → persistence → lateral movement → exfil)
+- **Technique relationships** (e.g., MITRE ATT&CK tactic chaining)
+
+**2. Coherent story vs. noise** — I'll distinguish:
+- Alerts that form a **narrative** (one actor, one campaign, cause-and-effect)
+- Alerts that are **coincidental or unrelated** (different entities, no linking evidence)
+- Alerts that are likely **benign / false positives**
+
+**3. Confidence + gaps** — I'll flag where the story depends on assumptions, and what pivot data (logs, PCAP, timeline) would confirm or break each hypothesis.
+
+## To make this maximally useful for training
+
+If you have them, include for each alert:
+- Timestamp
+- Source/detection rule
+- Affected entities (host, user, IP)
+- Severity
+- Any indicators (hashes, domains, commands)
+
+---
+
+Go ahead and paste the alert set and I'll work through it. If you'd like, tell me the **experience level** you're training for (SOC Tier 1 vs. threat hunter) so I can calibrate the depth of explanation.

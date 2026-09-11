@@ -2,5 +2,5 @@ node_modules/
 __pycache__/
 *.pyc
 report/*.json
-raw_responses/
+/raw_responses/
 .venv/

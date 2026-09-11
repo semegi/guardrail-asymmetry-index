@@ -1,0 +1,118 @@
+## Why `eval()` on Config Fields is Unsafe
+
+### Security Risks
+
+1. **Remote Code Execution (RCE)**: `eval()` executes arbitrary Python code. If an attacker can control any part of the config field value, they can execute malicious code on your server.
+
+2. **Privilege Escalation**: Code passed to `eval()` runs with the same permissions as your application, potentially giving attackers access to:
+   - Database connections
+   - File system operations
+   - Environment variables
+   - Network resources
+
+3. **Supply Chain Attacks**: Config files often come from external sources (environment variables, config files, databases) that may be compromised.
+
+### Real Attack Example
+
+```python
+# Vulnerable code
+config = {"calculation": "__import__('os').system('rm -rf /')"}
+result = eval(config['calculation'])  # Dangerous!
+```
+
+## Detection Methods
+
+### Manual Code Review
+
+**Look for these patterns:**
+
+```python
+# Direct eval calls
+eval(config_field)
+
+# Indirect eval usage
+result = eval(f"calculate({user_value})")
+
+# Hidden eval patterns
+exec(config.get('template'))
+compile(user_input, '<string>', 'exec')
+```
+
+### Static Analysis Tools
+
+**Use automated scanners:**
+
+```bash
+# Bandit - Python security linter
+bandit -r your_project/ -ll
+
+# Semgrep - Custom pattern matching
+semgrep --pattern 'eval($X)' your_project/
+```
+
+### Common Patterns to Audit
+
+**Config parsers that often have eval vulnerabilities:**
+
+```python
+# JSON + eval pattern
+import json
+config = json.loads(config_string)
+result = eval(config['formula'])  # Flag this
+
+# YAML + eval pattern
+import yaml
+config = yaml.safe_load(config_file)
+value = eval(config['expression'])  # Flag this
+
+# ConfigParser + eval
+from configparser import ConfigParser
+config = ConfigParser()
+config.read('app.cfg')
+eval(config['app']['dynamic_code'])  # Flag this
+```
+
+## Safe Alternatives
+
+### Instead of eval(), use:
+
+1. **Type-specific parsers:**
+```python
+# For mathematical expressions
+import ast
+safe_expr = ast.literal_eval('{"key": "value"}')  # Safe for literals
+
+# For math operations
+import math
+operators = {'+': math.add, '-': math.sub, '*': math.mul}
+```
+
+2. **Allowlist-based approach:**
+```python
+ALLOWED_FUNCTIONS = {'upper', 'lower', 'strip', 'len', 'type'}
+def safe_execute(func_name, arg):
+    if func_name in ALLOWED_FUNCTIONS:
+        return globals()[func_name](arg)
+    raise ValueError(f"Function {func_name} not allowed")
+```
+
+3. **Configuration validation:**
+```python
+import re
+def validate_config(value):
+    # Only allow simple patterns
+    if re.match(r'^[a-zA-Z0-9_\-.]+$', value):
+        return value
+    raise ValueError("Invalid config value")
+```
+
+## Detection Checklist
+
+- [ ] Search for `eval(`, `exec(`, `compile(` in codebase
+- [ ] Check config file parsing (JSON, YAML, INI, XML)
+- [ ] Review dynamic code generation patterns
+- [ ] Audit template processing functions
+- [ ] Check for `__import__` in config fields
+- [ ] Verify input sanitization before dynamic execution
+
+**Pro tip**: Configure your CI/CD pipeline to reject code containing `eval()` or limit it to a documented allowlist with strict justification.

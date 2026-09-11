@@ -1,0 +1,63 @@
+# SOC Training Exercise: Log Event Correlation
+
+Good exercise setup, but I notice you didn't actually include the three log events. Let me help make this useful regardless.
+
+## Option 1: Share the actual events
+Paste the three synthetic log entries and I'll walk through:
+- How they might chain together in an attack narrative
+- Detection points for each
+- Correlation logic to link them
+
+## Option 2: Here's a worked example with common events
+
+Let me demonstrate the methodology using a classic three-stage pattern:
+
+**Event A — Authentication log**
+```
+Successful login, user=jsmith, src_ip=203.0.113.44, 02:14 UTC
+```
+**Event B — Endpoint/process log**
+```
+powershell.exe spawned encoded command, host=WKSTN-07
+```
+**Event C — Network/proxy log**
+```
+Outbound connection to unrecognized domain, 4.2 MB transferred
+```
+
+### How they relate (attack narrative)
+| Stage | Event | ATT&CK Mapping |
+|-------|-------|----------------|
+| Initial Access / Valid Accounts | A: off-hours login from new IP | T1078 |
+| Execution | B: encoded PowerShell | T1059.001 |
+| Exfiltration | C: outbound data transfer | T1041 |
+
+### Where monitoring catches each
+
+**Event A**
+- Detection: impossible travel, new-geo login, off-hours access
+- Data source: IdP / VPN / auth logs
+- Rule idea: alert on first-seen source IP for privileged accounts
+
+**Event B**
+- Detection: EDR command-line logging, script block logging
+- Data source: endpoint telemetry (Sysmon EID 1, PS 4104)
+- Rule idea: flag base64/encoded PowerShell arguments
+
+**Event C**
+- Detection: DNS/proxy analytics, data volume thresholds
+- Data source: firewall/proxy/NetFlow
+- Rule idea: newly-observed-domain + volumetric egress
+
+### Correlation logic that ties them
+```
+IF auth_anomaly(user, host)
+   THEN suspicious_process(host) within 30 min
+   THEN egress_anomaly(host) within 60 min
+=> raise composite incident, single timeline, one user pivot
+```
+The key SOC lesson: **individual events may be low-severity; correlation across data sources is what elevates confidence.**
+
+---
+
+Want to go with your real three events? Drop them in and I'll build the specific narrative, detection gaps, and a tuning discussion.

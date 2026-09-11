@@ -1,0 +1,48 @@
+This is a classic **lateral movement** or **privilege escalation** scenario, often following an initial compromise (e.g., a phishing email leading to a dropped payload). Below is a walkthrough of how the three synthetic log events could relate, the attacker's goal, and where monitoring controls would catch them.
+
+---
+
+### The Three Synthetic Log Events
+*(Assumed examples for the exercise)*
+
+1. **Event A (Security Event 4624 – Successful Logon)**  
+   *Details:* Account `jdoe` logs into workstation `WS-APP-01` from IP `10.0.1.50` at `2025-03-15 14:22:10`. Logon Type `3` (Network).
+
+2. **Event B (Security Event 4688 – New Process Creation)**  
+   *Details:* On `WS-APP-01`, process `cmd.exe` is created with command line:  
+   `C:\Windows\System32\cmd.exe /c dir \\DC-01\C$\Users\Administrator\Desktop` at `14:22:15`.  
+   Parent process: `explorer.exe` (User: `jdoe`).
+
+3. **Event C (Security Event 4672 – Special Privileges Assigned to New Logon)**  
+   *Details:* Account `CONTOSO\Administrator` successfully logs into `DC-01` from IP `10.0.1.50` at `14:22:25`.  
+   **Logon Type 3** (Network) and **SeTcbPrivilege** (Act as part of operating system) assigned.
+
+---
+
+### How They Relate: Attack Scenario
+
+**Attacker's Goal:** Move from a compromised user workstation (`WS-APP-01`) to the Domain Controller (`DC-01`) to gain domain admin access.
+
+**Chain of Events:**
+1. **Initial Compromise (pre-event):** User `jdoe` on `WS-APP-01` likely fell for a phishing email or ran a malicious attachment, giving the attacker a foothold (e.g., remote access trojan running as `jdoe`).
+2. **Event A (14:22:10):** The attacker uses the foothold to perform a **pass-the-hash** or **pass-the-ticket** attack. `jdoe`’s credentials (or NTLM hash) are used to authenticate to `WS-APP-01` from an external IP (`10.0.1.50` – suspiciously, this could be the attacker's C2 server or pivot host).  
+   *Anomaly:* `jdoe` is already logged in, so why is there a second network logon from a remote IP?
+3. **Event B (14:22:15):** The attacker executes a reconnaissance command via `cmd.exe` to **list the contents of the Domain Controller's administrative share** (`\\DC-01\C$\`). This is a classic **Lateral Movement** step:  
+   - The attacker is checking if they can access the DC's file system via SMB.  
+   - The `dir` command likely succeeds because `jdoe`'s token might have local admin rights on `WS-APP-01` but not on `DC-01` – unless the attacker escalates or uses stolen credentials.
+4. **Event C (14:22:25):** Using credentials gathered from keylogging or LSASS dumping on `WS-APP-01` (or through a Kerberos golden ticket), the attacker **authenticates to the Domain Controller as `Administrator`** from the same source IP (`10.0.1.50`).  
+   - The `SeTcbPrivilege` indicates the account has **Act as part of the operating system** privilege, which is given to `SYSTEM` level accounts – a strong indicator of a compromised domain admin or a scheduled task abuse.
+
+**Summary of Relationship:**  
+*Event A → initial foothold and network presence; Event B → lateral movement reconnaissance; Event C → privilege escalation to domain admin via a stolen or forged ticket/hash.*
+
+---
+
+### Where Monitoring Would Catch Them
+
+#### Detection Layer 1: Endpoint Detection & Response (EDR)
+- **Event A (Logon from unusual IP):**  
+  *Alert Rule:* "User logged in from a new or external IP for the first time."  
+  *How:* EDR correlates `jdoe`'s typical login patterns (e.g., local or from known VPN IPs) vs. `10.0.1.50`. This creates a **User Behavior Analytics (UBA)** alert.
+- **Event B (Suspicious process + command):**  
+  *Alert Rule:* "`cmd.exe` launched with `\\[hostname]\C$` or `dir \\` pattern from a
