@@ -88,18 +88,23 @@ class AnthropicAdapter:
     """
 
     def __init__(self, api_key: str, model: str = "claude-opus-4-8",
-                 max_tokens: int = 1024) -> None:
-        self.name = model
+                 max_tokens: int = 1024, system: str | None = None,
+                 name: str | None = None) -> None:
+        self.name = name or model
         self._key = api_key
         self._model = model
         self._max_tokens = max_tokens
+        self._system = system
 
     def generate(self, prompt: str) -> str:
-        payload = json.dumps({
+        body = {
             "model": self._model,
             "max_tokens": self._max_tokens,
             "messages": [{"role": "user", "content": prompt}],
-        }).encode()
+        }
+        if self._system:
+            body["system"] = self._system
+        payload = json.dumps(body).encode()
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages", data=payload,
             headers={
@@ -121,18 +126,23 @@ class DeepSeekAdapter:
 
     def __init__(self, api_key: str, model: str = "deepseek-chat",
                  max_tokens: int = 1024,
-                 base_url: str = "https://api.deepseek.com") -> None:
-        self.name = model
+                 base_url: str = "https://api.deepseek.com",
+                 system: str | None = None, name: str | None = None) -> None:
+        self.name = name or model
         self._key = api_key
         self._model = model
         self._max_tokens = max_tokens
         self._base = base_url.rstrip("/")
+        self._system = system
 
     def generate(self, prompt: str) -> str:
+        messages = [{"role": "user", "content": prompt}]
+        if self._system:
+            messages.insert(0, {"role": "system", "content": self._system})
         payload = json.dumps({
             "model": self._model,
             "max_tokens": self._max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }).encode()
         req = urllib.request.Request(
             f"{self._base}/chat/completions", data=payload,

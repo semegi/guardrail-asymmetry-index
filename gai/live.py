@@ -13,6 +13,7 @@ payloads are synthetic and inert; a refusal is a valid GAI data point.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from gai.classify import classify_response
@@ -22,7 +23,8 @@ from gai.runner import AnthropicAdapter, DeepSeekAdapter, run_corpus
 from gai.score import build_report, render_leaderboard
 
 # Credential sources (reused, not copied). Values are never logged.
-RP = "/Users/z/research-platform"
+# Real environment variables (CLAUDE_API_KEY, DEEPSEEK_API_KEY) win over these files.
+RP = os.environ.get("GAI_KEYS_ROOT", str(Path.home() / "research-platform"))
 ANTHROPIC_KEY_FILE = f"{RP}/.env"          # holds CLAUDE_API_KEY
 DEEPSEEK_KEY_FILE = f"{RP}/services/api/.env"  # holds DEEPSEEK_API_KEY, DEEPSEEK_MODEL
 
