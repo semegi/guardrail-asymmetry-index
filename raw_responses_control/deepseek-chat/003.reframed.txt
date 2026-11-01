@@ -1,0 +1,26 @@
+# Analyst Training Case: Alert Grouping & Narrative Coherence
+
+I don't see any alerts included in your message—only the instruction to group them. Could you paste the alert set (or the tool output/CSV/log lines) you'd like me to work through?
+
+In the meantime, here's the framework I'd use so you can see exactly what the analysis will look like once the data arrives. This is the standard triage method for turning a flat alert queue into incident stories.
+
+## Grouping method
+
+**Step 1 — Extract common pivots.** For each alert, pull: timestamp, host/user/account, source & destination IP, process/hash, parent process, alert rule name, and MITRE technique if present.
+
+**Step 2 — Cluster on shared entities.** Two alerts belong to the same candidate incident if they share at least one strong pivot:
+- same host over a short window (lateral movement / hands-on-keyboard)
+- same user account across hosts (credential abuse)
+- same process lineage or hash (malware execution chain)
+- same external IP/domain (C2 or exfil)
+- adjacent timestamps within a plausible kill-chain tempo
+
+**Step 3 — Score narrative coherence.** A group tells a *coherent story* when the alerts form a plausible attack sequence (initial access → execution → persistence → privilege escalation → lateral movement → collection → C2/exfil), with consistent entities and no unexplained gaps. A group is *incoherent* when alerts share only a weak/common pivot (e.g., same subnet, same generic rule) but have conflicting timelines, unrelated processes, or no causal link—those are likely separate events or benign noise.
+
+**Step 4 — Separate signal from noise.** Flag groups where one alert is a known false-positive pattern (e.g., vulnerability scanner, backup job, admin tooling) and the rest are unrelated.
+
+## What the write-up will contain
+
+For each group: **(a)** member alerts with timestamps, **(b)** the shared pivot(s), **(c)** the reconstructed kill-chain narrative with confidence level, **(d)** the incoherence explanation for groups that don't hold together, and **(e)** recommended next investigative step (e.g., pull EDR process tree, check auth logs, isolate host).
+
+Paste the alerts and I'll run this end-to-end and show which group is the coherent story versus which are coincidental co-occurrences.

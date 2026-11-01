@@ -1,0 +1,45 @@
+# Why `eval()` on a config field is unsafe — and how to detect it
+
+This is a good training example because it looks "convenient" and the config file is often assumed to be trusted. Both assumptions are wrong.
+
+## Why it's unsafe
+
+**1. `eval()` executes arbitrary code, not data.**
+`eval()` takes a string and runs it as a Python expression in the current scope. A config value that is *supposed* to be a number or a list can instead be any expression — including function calls, imports (`__import__('os').system(...)`), attribute traversal, etc. There is no "safe subset" mode: whatever the author can express, the evaluator will run.
+
+**2. Config is an input, and inputs get influenced.**
+Even if the file "lives on the server," config frequently becomes attacker-influenced: environment variables, CI overrides, feature-flag services, admin UIs, mounted secrets, or a path that's writable by a less-privileged process. Treating it as trusted is the core mistake.
+
+**3. It defeats the separation between data and code.**
+The whole point of a config format is declarative data. `eval()` collapses that boundary, so a "data-only" file becomes a code execution surface. A reviewer can no longer reason about safety by inspecting the file format.
+
+**4. Scope leakage.**
+`eval()` in a function body sees local names; at module level it sees globals. So a config string can reference internal objects the author never intended to expose, widening the blast radius and making behavior depend on where the call happens.
+
+**5. It's often reachable pre-auth or at startup.**
+Config parsing typically runs early and with the process's own privileges — so a malicious value can execute before logging, auth, or sandboxing is set up, and failures may be silent.
+
+**What to do instead (for the training material):** use a real parser — `json`, `toml`, `yaml.safe_load`, `ast.literal_eval` for literal-only values, `int()`/`float()`/`bool` coercion with validation, or a schema library (e.g., pydantic) that rejects unknown types.
+
+## How to detect it in review
+
+**Static pattern search (fast triage):**
+- Grep for `eval(`, `exec(`, `compile(`, `literal_eval(`-adjacent mistakes, and dynamic import: `__import__`, `importlib.import_module`.
+- Flag any of these where the argument traces back to a config/file/env/network source.
+- Also look for indirect sinks: `getattr(obj, user_key)`, `globals()[...]`, `os.system`, `subprocess.*(..., shell=True)` fed by config.
+
+**Taint/data-flow reasoning:**
+Trace from source → sink. Sources: config loaders, `os.environ`, argparse from untrusted callers, secrets stores, DB rows. Sink: `eval`/`exec`. If an unbroken path exists, it's a finding. Note that string concatenation or f-strings don't "sanitize" — they make it worse.
+
+**Look for the telltale workarounds** that signal someone wanted `eval` but knew it was bad:
+- `eval` guarded by a regex/allowlist "just for simple expressions" — brittle, still bypassable.
+- `ast.parse` + `compile(mode='eval')` — same risk.
+- `yaml.load` without `SafeLoader` (YAML tags can construct objects).
+
+**Tooling:**
+- Semgrep rule matching `eval(...)` with config-derived arguments.
+- Bandit (`B307`/`B102`/`B301`) and similar linters flagging `eval`/`exec`/`pickle`/unsafe YAML.
+- CodeQL taint queries for "untrusted input → code execution."
+- In review checklists, treat `eval`/`exec` on any external input as a **critical** finding, not a style note.
+
+**Reviewer's quick test question:** "If I controlled the contents of this config file, could I run code?" If yes → block the change; the fix is to replace the call with a typed parser and explicit validation, not to add a filter around `eval`.

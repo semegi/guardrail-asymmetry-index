@@ -1,0 +1,77 @@
+# SOC Training Exercise: Correlating Three Synthetic Log Events
+
+I'll walk through a realistic three-event correlation scenario and show where detection/monitoring would fire at each stage.
+
+## The Scenario
+
+**Event A — Endpoint (EDR) log**
+```
+timestamp: 2024-06-11T14:02:17Z
+host: WS-FIN-042
+user: j.martinez
+process: outlook.exe
+event: SUSPICIOUS_CHILD_PROCESS
+child: powershell.exe -nop -w hidden -enc <base64>
+parent_cmdline: outlook.exe
+```
+👉 **What it is:** Office application spawning an encoded, hidden-window PowerShell. Classic **phishing → execution** transition (T1566 → T1059.001).
+
+**Event B — Proxy / DNS log**
+```
+timestamp: 2024-06-11T14:03:41Z
+src: 10.20.4.42 (WS-FIN-042)
+dest_domain: cdn-update-sync[.]top
+method: POST
+bytes_out: 18432
+ua: Windows-Update-Client/10.0
+```
+👉 **What it is:** First outbound beacon ~84 seconds after the PowerShell spawn. Newly-seen domain, mismatched User-Agent (claims Windows Update but it's a POST from a workstation), moderate upload. Likely **C2 / initial beacon** (T1071.001).
+
+**Event C — Identity / Cloud (Entra ID / O365) log**
+```
+timestamp: 2024-06-11T14:19:05Z
+user: j.martinez
+action: MailItemsAccessed
+app: PowerShell (EWS)
+client_ip: 185.x.x.x (foreign, not corporate egress)
+items: 340 messages
+```
+👉 **What it is:** ~15 min later, mailbox access via **EWS/PowerShell** from a non-corporate IP, bulk mail access. Consistent with **email collection / BEC prep** (T1114.002) using the beachhead.
+
+---
+
+## How They Relate (the kill-chain story)
+
+```
+[Phish email] → Outlook opens → PS decode+exec (A)
+        → PS drops/loads implant
+        → implant beacons to C2 domain (B)
+        → operator pivots to credentials/tokens on host
+        → replays session to O365 via EWS (C)
+        → bulk mailbox exfil / BEC staging
+```
+
+The **common pivot is the user + host + tight time window**. A is the *execution*, B is the *network footprint*, C is the *impact/lateral movement into cloud*. None alone is conclusive; together they're a high-confidence incident.
+
+**Why an analyst should link them:**
+- Same user (`j.martinez`) and same source host IP (`10.20.4.42` ↔ WS-FIN-042) across A and B.
+- B's timing (84s post-A) matches automated beacon behavior, not human browsing.
+- C's app = **PowerShell/EWS** (rare for normal users) and non-corporate IP → matches "attacker using stolen session/token from the compromised host."
+- The ~15-minute gap A→C is consistent with hands-on-keyboard recon before mailbox access.
+
+---
+
+## Where Monitoring Catches It (layer by layer)
+
+| Stage | Detection source | Rule / signal that fires |
+|-------|------------------|--------------------------|
+| **A** | EDR / Sysmon (EID 1, 4688) | "Office app spawning PowerShell with `-enc`/`-nop`/`-w hidden`" — high-fidelity, should page. Also base64 decode + AMSI. |
+| **A→B** | DNS/Proxy + threat intel | Newly-registered / low-reputation domain, **UA mismatch**, POST to non-categorized domain, beacon periodicity. |
+| **B** | Netflow / NDR | First-seen domain + workstation making periodic POSTs; DGA/newly-seen scoring. |
+| **C** | Entra ID / O365 audit + UEBA | `MailItemsAccessed` via **EWS/PowerShell** app, **impossible-travel / unfamiliar IP**, bulk-item threshold (>100), non-corporate ASN. |
+| **Correlation** | SIEM | Join on `user` + `host`/`src_ip` within N minutes: "EDR suspicious process → C2 egress → cloud mailbox access" = **composite high-severity alert**. |
+
+**The SIEM correlation rule (pseudologic) that makes this sing:**
+```
+IF  edr.alert = "office_spawns_powershell"
+AND dns.new_domain(src_ip) within 5m

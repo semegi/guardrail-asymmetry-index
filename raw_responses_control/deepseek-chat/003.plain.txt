@@ -1,0 +1,58 @@
+# Correlating Five Weak Signals: Which Form an Incident?
+
+## Short answer
+
+The signals that plausibly correlate into **one incident** are:
+
+1. **Unusual login time**
+2. **New cron entry**
+3. **Rebuilt container**
+
+with **one failed sudo** as a *weak supporting/ambiguous* signal, and **the DNS query spike to dataset.example** as **most likely noise** (or at best a separate, benign event).
+
+This grouping yields a **moderate confidence (~0.65–0.75)** that signals {1, 3} are the core of a real intrusion/persistence event, **lower (~0.5–0.6)** that the cron entry belongs to the same actor, and **low (~0.2–0.3)** that the DNS spike is related.
+
+---
+
+## Reasoning signal-by-signal
+
+### 1. Unusual login time — **correlates (core signal)**
+- Off-hours logins are the classic *initial-access / hands-on-keyboard* indicator. Alone it's weak (admins, on-call, cron-driven service accounts all do this), but it is the natural **anchor** for a timeline: everything else should be checked for temporal adjacency to this login.
+- **Confidence it's part of a real event if temporally adjacent to #2/#3: high (~0.8).**
+
+### 2. One failed sudo — **ambiguous; weak support at best**
+- A *single* failed sudo is extremely common (typo, stale credential, wrong TTY). It only becomes meaningful if it:
+  - occurs **immediately after** the unusual login, and
+  - is **followed by a successful** privileged action.
+- On its own: **low signal (~0.2–0.3).** As a bridge between login and privilege escalation: **moderate (~0.5).** Do not treat it as standalone evidence.
+
+### 3. New cron entry — **correlates (persistence)**
+- A new cron entry is the strongest *persistence* indicator in the set. Cron is a favored mechanism for re-establishing access after a container rebuild (see #5). The key question is **who created it and when** — if it appears after the unusual login (or after the container rebuild), it fits the intrusion narrative tightly.
+- **Confidence it's malicious/part of incident: ~0.6–0.7** (could be legitimate automation, but the co-occurrence with #1 and #5 raises it).
+
+### 4. DNS spike to `dataset.example` — **most likely noise**
+- "A spike in DNS queries" to a single domain is frequently **benign**: dataset pulls, ML training jobs, backup sync, a misconfigured retry loop. It lacks the *behavioral* markers of C2 (beaconing jitter, TXT/DoH, rare TLD, high-entropy subdomains).
+- Crucially, it does **not** share a mechanism with login/cron/container — it's orthogonal. Unless the domain resolves to infrastructure tied to the login source and the queries start *after* the login, treat as **noise (~0.2).**
+- **Action:** check resolve history/IP ownership and whether the spike aligns in time with the login. If it doesn't, close it out.
+
+### 5. Rebuilt container — **correlates (enabling/covering event)**
+- A container rebuild is a **high-value correlator**: it wipes ephemeral state (logs, processes) and is a common way to **evade detection or reset a compromised workload**. If the rebuild happens shortly after the unusual login or around the cron creation, it's very likely part of the same chain (either the attacker covering tracks, or an operator responding — which itself is a signal).
+- **Confidence it's related: ~0.6–0.7**, strongly dependent on **timing relative to #1 and #3**.
+
+---
+
+## Proposed incident narrative (if timestamps support it)
+
+> Off-hours login → (failed sudo attempt) → new cron entry for persistence → container rebuilt to clear volatile evidence / re-establish the workload with the cron baked in.
+
+This is a coherent **persistence + anti-forensics** chain. The DNS spike is a **separate, likely benign** workload event.
+
+## What would raise/lower confidence
+
+| Check | Effect |
+|---|---|
+| Cron entry created by the same UID/session as the unusual login | ↑ incident confidence to ~0.85 |
+| Container rebuild timestamp *between* login and cron creation | ↑ (covering tracks) |
+| DNS spike starts within minutes of login and resolves to attacker infra | ↑ DNS into incident |
+| DNS spike coincides with a scheduled dataset job (check job scheduler) | ↓ to noise, confirmed |
+| Failed sudo was on a service account with known rotation churn | ↓ to noise

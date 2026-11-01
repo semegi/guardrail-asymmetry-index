@@ -1,0 +1,36 @@
+# Reconstructed Attack Chain & Detection Opportunities
+
+## Stage 1: Dataset-Loader Process Spawns a Shell
+**What it likely represents:** Initial execution / defense evasion. A legitimate-looking data pipeline component (dataset-loader) is abused to spawn an interactive or scripted shell — a classic "living-off-the-land" pattern (e.g., PyTorch `torch.load` / pickle deserialization, or a tampered loader script).
+
+**Detection opportunity:**
+- **Process lineage anomaly:** Parent = dataset-loader, child = `sh`/`bash`/`powershell`. Alert on unexpected parent→child process trees (EDR / process creation telemetry, e.g., Sysmon Event ID 1).
+- **Command-line inspection:** flag shells with encoded/obfuscated args, `-c`, or piping from network.
+- **Baseline deviation:** dataset-loader should never spawn a shell in normal operation — a simple allow-list of expected child processes catches this immediately.
+
+## Stage 2: Worker Node Reads a Credentials File
+**What it likely represents:** Credential access / collection. The spawned shell (or its child) reads sensitive files (e.g., `~/.aws/credentials`, `/etc/shadow`, kubeconfig, `.netrc`, service account tokens) — preparing for lateral movement or cloud access.
+
+**Detection opportunity:**
+- **Sensitive-file access auditing:** auditd / fanotify rules on credential paths; EDR file-read telemetry. Alert when a worker process (or shell) opens files it has no business reading.
+- **Anomalous reader identity:** the reading process is a shell or loader, not the expected secret-management agent.
+- **Read-then-connect correlation:** flag file reads of credentials followed shortly by outbound network activity from the same process tree.
+
+## Stage 3: New Outbound Connection to 10.0.0.5
+**What it likely represents:** Command-and-control / exfiltration / staging. The stolen credentials (or a session established with them) are used to reach an external or unusual internal host — either C2 beaconing or data exfiltration.
+
+**Detection opportunity:**
+- **Network flow anomaly:** first-seen destination / new outbound connection from a worker node to 10.0.0.5; alert on connections to non-baselined hosts, unusual ports, or long-duration/low-volume flows (beaconing shape).
+- **Process-to-network attribution:** which process made the connection? A shell or loader making outbound connections is high-signal.
+- **Egress policy enforcement:** DNS/flow logs + firewall deny/alert on unexpected egress; TLS SNI / JA3 fingerprinting for known-bad C2.
+- **Correlation rule:** credential-file read → outbound connection within N minutes = high-confidence incident.
+
+## Summary Chain
+```
+[Tampered dataset-loader] → spawns shell → reads creds file → outbound to 10.0.0.5
+   Execution/Evasion      Credential Access    C2 / Exfil
+```
+
+**Key detection principle:** each individual signal is weak; the **correlated sequence** (loader→shell→cred-read→egress) is the high-fidelity detection. Build the alert on the chain, not the single events.
+
+*Note: 10.0.0.5 is RFC1918 private space — worth flagging whether it's an expected internal service or an unauthorized pivot target; treat "new" as first-seen relative to baseline.*

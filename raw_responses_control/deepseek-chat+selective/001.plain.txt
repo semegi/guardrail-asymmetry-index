@@ -1,0 +1,55 @@
+# Understanding and Mitigating `eval()`-Based RCE in Config Loaders
+
+This is a classic and well-documented vulnerability pattern. I'll explain it at an educational level—the mechanism, the general class of attack, and defensive strategies—without providing a working payload.
+
+## The Execution Path (Conceptual)
+
+The vulnerability arises from a single trust-boundary violation: **configuration data is treated as executable code**.
+
+1. **Untrusted input enters the system.** The config field (`config['transform']`) may arrive from a YAML/JSON file, a database, a network API, a shared dataset registry, or user-supplied metadata. If any upstream source is writable by an attacker—or if a user is tricked into loading a malicious config—that string is attacker-controlled.
+
+2. **The string is handed to `eval()`.** `eval()` compiles and executes the string as a Python expression in the current scope. This is not "parsing a transform description"—it is arbitrary code execution with the privileges of the loader process.
+
+3. **The expression runs with full interpreter access.** Since `eval()` receives the full builtin namespace by default, an expression can reach module imports, file I/O, subprocess execution, and network access. Even expressions that *look* like data transformations can invoke callables, and expression nesting/attribute access can traverse from almost any object to powerful primitives.
+
+4. **Result: code runs during dataset loading.** Because this happens before any meaningful validation, the attacker's code executes in the training/inference environment—potentially exfiltrating data, modifying datasets, or establishing persistence.
+
+The key insight: **there is no parser separating "data" from "code"** at the `eval` boundary, so any expression grammar is a potential execution primitive.
+
+## Why This Is a Systemic Risk
+
+- **`eval` inherits the caller's scope and builtins.** Even restricted-builtins approaches are notoriously bypassable via introspection (`__subclasses__`, `__globals__`, etc.).
+- **Config files are often treated as less sensitive than code**—shared across teams, pulled from registries, committed to repos—which widens the attack surface.
+- **Synthetic data loaders often run in trusted CI/training environments** with access to credentials, model weights, and internal networks.
+
+## Defensive Detection
+
+**Static/dynamic analysis:**
+- Lint and block `eval`, `exec`, `compile`, `__import__`, and `getattr` on config-sourced strings in code review and CI (e.g., bandit rules, Semgrep patterns). Flag any path where a config value reaches these sinks.
+- Add SAST rules that trace config deserialization → dynamic execution sinks.
+
+**Runtime detection:**
+- Instrument the loader to log/alert when `eval`/`exec` is invoked on config-derived data (source-tagged taint tracking).
+- EDR/audit logs: unexpected `subprocess`, `os.system`, socket creation, or file writes from a dataset-loading process are strong signals.
+- Monitor outbound connections from training jobs—beaconing or DNS exfil from a loader is anomalous.
+- Track provenance: alert when configs originate from outside the trusted registry or fail signature verification.
+
+**Behavioral baselines:** dataset loaders should have a narrow, predictable syscall/network profile; deviations are high-signal.
+
+## Defensive Blocking
+
+1. **Eliminate `eval` entirely.** Replace it with a safe, data-only mechanism:
+   - A whitelisted transform registry: `config['transform']` maps to a named, pre-approved function (e.g., `"normalize" -> normalize_fn`), never code.
+   - A declarative schema (JSON/YAML) interpreted by a restricted parser that only understands known operations and parameters.
+
+2. **Strict input validation.** If some expression-like syntax is unavoidable, use a dedicated safe-expression library or a parser with an allowlisted grammar (constants, arithmetic, listed functions only)—never Python's `eval`. Validate against a JSON Schema, reject unknown keys, and enforce strict types/lengths.
+
+3. **Sandboxing as defense-in-depth.** Run loaders in least-privilege containers: no network egress, read-only filesystem, dropped capabilities, separate service account, no access to credentials or model artifacts. This contains blast radius even if validation is bypassed.
+
+4. **Supply-chain controls.** Sign and verify configs, pin their source, and restrict who can publish to the dataset registry. Treat configs with the same trust level as code.
+
+5. **Principle of least privilege** for the loader process—no secrets in environment, scoped filesystem mounts—so a successful execution is low-impact.
+
+## Summary
+
+The vulnerability is a **data-to-code confusion**: `eval` collapses the boundary between configuration and executable logic. The reliable fix is architectural—**never `eval` untrusted config

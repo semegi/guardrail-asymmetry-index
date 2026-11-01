@@ -37,6 +37,25 @@ variants — 12 API calls, every verbatim response captured under
 frontier model, did the defensive work without needing a reframing crutch. That is a
 negative result, and it is reported as one.
 
+### Positive control (2026-11-01): it detects a lockout, and it found two of its own defects
+
+A null result from an instrument that has never detected anything proves little. So the same model was run
+three ways with expectations [pre-registered and committed before the run](docs/findings/2026-11-01-positive-control-prereg.md):
+no system prompt, a prompt that refuses all security work, and a prompt that refuses analysis of a specific attack
+but allows training material.
+
+| Config | GAI | Pre-registered checks |
+|---|---|---|
+| base | 1.00 | 1 of 2 pass |
+| strict (refuses everything) | 0.00 | 1 of 1 pass |
+| selective (refuses specific attacks) | 0.33 | 1 of 3 pass |
+
+**GAI separates the three in the expected order: it detects an induced lockout.** The jailbreak-delta (suppression)
+checks failed, and the run traced every failure to two defects in the instrument itself: two of the three benign
+reframings refer to data they don't contain, and the judge grades a clarification request or a partial answer as
+a refusal. The July jailbreak-delta figures for those two tasks inherit the first defect; the July GAI scores do not.
+Full write-up: [`docs/findings/2026-11-01-positive-control-results.md`](docs/findings/2026-11-01-positive-control-results.md).
+
 ### The part worth reading: the instrument caught itself being wrong
 
 The first pass used a keyword-heuristic classifier and scored claude-opus-4-8 at GAI
@@ -112,6 +131,7 @@ python3 -m gai.cli        # bundled offline demo, writes report/
 python3 -m gai.record     # scores real model transcripts you paste in
 python3 -m gai.live       # scores real hosted models (needs API keys)
 python3 -m gai.rejudge    # re-scores captured responses with the model judge
+python3 -m gai.control    # positive control: base vs induced-lockout configurations
 python3 -m pytest -q      # full suite, no network required
 ```
 
@@ -148,7 +168,7 @@ measurement instrument, not an attack tool.
 - Incident-grade payload-analysis tasks — the end of the task spectrum where lockout is
   most likely, and where the current n = 3 corpus is silent.
 - A second independent judge, and repeat-judging for variance bars.
-- A refusing baseline model, to confirm the instrument detects asymmetry when it is present.
+- Run 2 of the positive control, after fixing the reframing and judge defects it found.
 - Drift tracking across model releases.
 - Companion: a Kosmos agent-containment harness — measuring an agent's *containment*
   behavior alongside a model's *refusal* behavior.

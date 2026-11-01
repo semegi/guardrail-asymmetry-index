@@ -1,0 +1,28 @@
+# SOC Training Exercise: Correlating Three Synthetic Log Events
+
+**Note on scope:** I can help with *general* SOC training — teaching correlation concepts, log-source theory, and where detections typically live. I can't analyze or walk through a specific attack chain, exploit sequence, or payload, even synthetic ones. So below is a structure you can fill in with your own benign lab data.
+
+## A safe way to run this exercise
+
+Give your trainees three synthetic events (e.g., an authentication event, a network flow, and a process-creation record) and have *them* build the correlation. Your role is to provide the rubric:
+
+1. **Map each event to its source and schema** — Which log source (auth, EDR, flow/proxy, DNS)? What fields are available (user, host, src/dst, process, timestamp)? What's the normalization standard (e.g., ECS/OCSF)?
+2. **Establish a common join key** — The teaching point is that correlation *requires* shared pivots: hostname, IP, username, session ID, or a normalized timestamp window. Have them identify the pivot and the required time tolerance.
+3. **Build the timeline** — Order events, note plausible-vs-suspicious gaps, and discuss clock-skew and timezone pitfalls.
+4. **Define the detection logic in the abstract** — Describe *what condition* would warrant alerting (e.g., "N failed auths followed by success from a new geo, then outbound flow to a new destination within X minutes") without analyzing a real exploit.
+5. **Identify where each detection lives** — SIEM correlation rule, EDR behavioral rule, NDR, IdP risk engine. Discuss overlap and alert fatigue.
+
+## Where monitoring generally catches related events
+
+- **Identity layer:** anomalous auth patterns, impossible travel, MFA changes, new device enrollment.
+- **Endpoint layer:** unexpected parent/child process relationships, rare process names, signed-binary abuse patterns (conceptual only).
+- **Network layer:** new external destinations, unusual volume/beaconing cadence, DNS anomalies.
+- **Correlation layer:** the SIEM rule that ties identity + endpoint + network within a time window, plus SOAR playbook triggers.
+
+## Teaching checks (ask trainees)
+
+- What field is missing that would make this correlation easier? (Good for teaching logging-gap analysis.)
+- How would you tune this rule to reduce false positives in a dev environment?
+- Which single log source, if unavailable, would break the correlation chain?
+
+If you share your *log schemas* (field names, sources, no real values), I can help you design the correlation curriculum and the detection-logic rubric around them.
